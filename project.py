@@ -483,12 +483,21 @@ class RealTimeTelescopeScheduler:
     
     def update_observation_list(self):
         """Update the observation list display"""
+        # Preserve current selection
+        selected = self.obs_tree.selection()
+        selected_id = None
+        if selected:
+            selected_id = self.obs_tree.item(selected[0], "text")
+
         self.obs_tree.delete(*self.obs_tree.get_children())
-        
+
         for obs in sorted(self.observations, key=lambda x: (x['priority'], x['start_time'])):
-            self.obs_tree.insert("", "end", text=obs["id"],
-                               values=(obs["target"], obs["priority"], 
-                                      obs["status"], obs.get("telescope", "")))
+            item = self.obs_tree.insert("", "end", text=obs["id"],
+                                    values=(obs["target"], obs["priority"],
+                                            obs["status"], obs.get("telescope", "")))
+            # Restore selection if this is the previously selected item
+            if selected_id is not None and str(obs["id"]) == str(selected_id):
+                self.obs_tree.selection_set(item)
     
     def update_priority(self):
         """Update observation priority"""
@@ -963,12 +972,12 @@ class RealTimeTelescopeScheduler:
                 best_telescope = telescope['name']
         
         # Add best telescope annotation
-        self.comp_ax1.text(0.5, -0.2, 
-                          f"Best Performing Telescope: {best_telescope} (Score: {best_score:.1f})",
-                          ha='center', va='center', transform=self.comp_ax1.transAxes,
-                          fontsize=10, bbox=dict(facecolor='yellow', alpha=0.5))
+        # self.comp_ax1.text(0.5, -0.2, 
+        #                   f"Best Performing Telescope: {best_telescope} (Score: {best_score:.1f})",
+        #                   ha='center', va='center', transform=self.comp_ax1.transAxes,
+        #                   fontsize=10, bbox=dict(facecolor='yellow', alpha=0.5))
         
-        self.comp_canvas.draw()
+        # self.comp_canvas.draw()
 
 if __name__ == "__main__":
     root = tk.Tk()
