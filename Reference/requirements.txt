@@ -25,3 +25,6 @@ pip install sqlparse==0.3.0
 pip install webencodings==0.5.1
 pip install wrapt==1.11.2
 pip install xhtml2pdf==0.2.4
+pip install python-dotenv
+pip install matplotlib
+pip install requests
