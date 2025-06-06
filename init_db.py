@@ -2,7 +2,7 @@
 import sqlite3
 
 def initialize_database():
-    conn = sqlite3.connect("telescope_schedule.db")
+    conn = sqlite3.connect("telescope_schedule.db", check_same_thread=False)
     c = conn.cursor()
 
     c.execute('''CREATE TABLE IF NOT EXISTS observations (
@@ -26,7 +26,8 @@ def initialize_database():
         target TEXT,
         completed_at TEXT,
         success INTEGER,
-        duration INTEGER
+        duration INTEGER,
+        priority TEXT
     )''')
 
     c.execute('''CREATE TABLE IF NOT EXISTS weather_log (

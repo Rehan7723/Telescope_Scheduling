@@ -15,9 +15,9 @@ sample_observations = [
         "start_time": now,
         "end_time": now + timedelta(hours=1),
         "priority": "High",
-        "wavelength": "Optical",
+        "wavelength": "Radio",
         "status": "Pending",
-        "telescope": None
+        "telescope": None,
     },
     {
         "target": "Crab Nebula",
@@ -28,7 +28,7 @@ sample_observations = [
         "priority": "Medium",
         "wavelength": "Infrared",
         "status": "Pending",
-        "telescope": None
+        "telescope": None,
     },
     {
         "target": "Centaurus A",
@@ -39,7 +39,7 @@ sample_observations = [
         "priority": "Critical",
         "wavelength": "Radio",
         "status": "Pending",
-        "telescope": None
+        "telescope": None,
     },
     {
         "target": "Orion Nebula",
@@ -48,9 +48,9 @@ sample_observations = [
         "start_time": now,
         "end_time": now + timedelta(hours=1),
         "priority": "Low",
-        "wavelength": "Optical",
+        "wavelength": "Radio",
         "status": "Pending",
-        "telescope": None
+        "telescope": None,
     },
     {
         "target": "Sirius",
@@ -61,7 +61,7 @@ sample_observations = [
         "priority": "Medium",
         "wavelength": "Optical",
         "status": "Pending",
-        "telescope": None
+        "telescope": None,
     },
     {
         "target": "Vega",
@@ -72,7 +72,7 @@ sample_observations = [
         "priority": "High",
         "wavelength": "Infrared",
         "status": "Pending",
-        "telescope": None
+        "telescope": None,
     },
     {
         "target": "Messier 87 (M87)",
@@ -83,18 +83,18 @@ sample_observations = [
         "priority": "Critical",
         "wavelength": "Radio",
         "status": "Pending",
-        "telescope": None
+        "telescope": None,
     },
     {
         "target": "Polaris",
         "coordinates": "02h31m49.09s +89d15m50.8s",
         "duration": 15,
         "start_time": now,
-        "end_time": now + timedelta(hours=1),
+        "end_time": now + timedelta(hours=3),
         "priority": "Low",
-        "wavelength": "Optical",
+        "wavelength": "Radio",
         "status": "Pending",
-        "telescope": None
+        "telescope": None,
     },
     {
         "target": "Sagittarius A*",
@@ -105,30 +105,30 @@ sample_observations = [
         "priority": "Critical",
         "wavelength": "Radio",
         "status": "Pending",
-        "telescope": None
+        "telescope": None,
     },
     {
         "target": "Large Magellanic Cloud",
         "coordinates": "05h23m34.6s -69d45m22s",
         "duration": 50,
         "start_time": now,
-        "end_time": now + timedelta(hours=3),
+        "end_time": now + timedelta(hours=8),
         "priority": "High",
         "wavelength": "Optical",
         "status": "Pending",
-        "telescope": None
+        "telescope": None,
     },
     {
         "target": "Antares",
         "coordinates": "16h29m24.4s -26d25m55s",
         "duration": 35,
         "start_time": now,
-        "end_time": now + timedelta(hours=2),
+        "end_time": now + timedelta(hours=6),
         "priority": "Medium",
-        "wavelength": "Infrared",
+        "wavelength": "Radio",
         "status": "Pending",
-        "telescope": None
-    }
+        "telescope": None,
+    },
 ]
 
 for obs in sample_observations:

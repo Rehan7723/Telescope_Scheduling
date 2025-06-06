@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-from datetime import datetime, timedelta , timezone
+from datetime import datetime, timedelta, timezone
 import random
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -46,15 +46,18 @@ class RLSchedulingWrapper:
         except Exception as e:
             self.log(f"⚠️  Weather fetch failed at ({lat}, {lon}): {e}")
             return 0.0
-    
+
     def fetchD_weather_for_location(self, lat, lon):
         """
         Dummy version for testing without external API.
         Simulates weather data but maintains structure.
         """
         import random
+
         try:
-            cloud = round(random.uniform(0.0, 1.0), 2) # Simulate cloud cover between 0.0 and 1.0
+            cloud = round(
+                random.uniform(0.0, 1.0), 2
+            )  # Simulate cloud cover between 0.0 and 1.0
             self.log(f"☁️ Cloud cover at ({lat}, {lon}): {cloud}")
             return cloud
         except Exception as e:
@@ -68,7 +71,9 @@ class RLSchedulingWrapper:
             time = Time(obs_time)
             altaz = coord.transform_to(AltAz(obstime=time, location=loc))
             visible = altaz.alt.deg > 20
-            self.log(f"🔭 Target visibility at {lat}, {lon}: {altaz.alt.deg:.2f}° → {'YES' if visible else 'NO'}")
+            self.log(
+                f"🔭 Target visibility at {lat}, {lon}: {altaz.alt.deg:.2f}° → {'YES' if visible else 'NO'}"
+            )
             return visible
         except Exception as e:
             self.log(f"⚠️  Visibility check failed for {ra_dec_str}: {e}")
@@ -82,7 +87,9 @@ class RLSchedulingWrapper:
             loc = LocationInfo(latitude=lat, longitude=lon)
             s = sun(loc.observer, date=local_time.date(), tzinfo=local_time.tzinfo)
             night = local_time < s["sunrise"] or local_time > s["sunset"]
-            self.log(f"🌙 Night check at ({lat}, {lon}) → {night} (Local time: {local_time.time()})")
+            self.log(
+                f"🌙 Night check at ({lat}, {lon}) → {night} (Local time: {local_time.time()})"
+            )
             return night
         except Exception as e:
             self.log(f"⚠️  Night check failed: {e}")
@@ -91,7 +98,9 @@ class RLSchedulingWrapper:
     def run_step(self):
         now = datetime.utcnow().replace(tzinfo=timezone.utc)
         available_telescopes = [
-            t for t in self.telescopes if t["status"] == "Operational" and not t["current_observation"]
+            t
+            for t in self.telescopes
+            if t["status"] == "Operational" and not t["current_observation"]
         ]
         pending_obs = []
         for o in self.observations:
@@ -115,24 +124,34 @@ class RLSchedulingWrapper:
             return
 
         cloud_cover = [
-            self.fetchD_weather_for_location(t["lat"], t["lon"]) for t in available_telescopes
+            self.fetchD_weather_for_location(t["lat"], t["lon"])
+            for t in available_telescopes
         ]
 
         for obs in pending_obs:
-            self.log(f"\n🔍 Evaluating observation: {obs['target']} ({obs['coordinates']})")
+            self.log(
+                f"\n🔍 Evaluating observation: {obs['target']} ({obs['coordinates']})"
+            )
+            scheduled = False
 
             for i, telescope in enumerate(available_telescopes):
                 self.log(f"➡️ Checking telescope: {telescope['name']}")
 
                 if obs["wavelength"] not in telescope["capabilities"]:
-                    self.log(f"   ❌ Capability mismatch: {obs['wavelength']} not in {telescope['capabilities']}")
+                    self.log(
+                        f"   ❌ Capability mismatch: {obs['wavelength']} not in {telescope['capabilities']}"
+                    )
                     continue
 
-                if obs["wavelength"] not in ["Radio"] and not self.is_night(now, telescope["lat"], telescope["lon"]):
+                if obs["wavelength"] not in ["Radio"] and not self.is_night(
+                    now, telescope["lat"], telescope["lon"]
+                ):
                     self.log("   🌞 Not nighttime at telescope location.")
                     continue
 
-                if not self.is_target_visible(obs["coordinates"], now, telescope["lat"], telescope["lon"]):
+                if not self.is_target_visible(
+                    obs["coordinates"], now, telescope["lat"], telescope["lon"]
+                ):
                     self.log("   🚫 Target not visible (below 20° altitude).")
                     continue
 
@@ -140,14 +159,39 @@ class RLSchedulingWrapper:
                     self.log(f"   ☁️ Too cloudy for optical/UV ({cloud_cover[i]:.2f})")
                     continue
 
-                # Passed all checks
-                self.log(f"✅ Scheduling {obs['target']} on {telescope['name']}", tag="green")
+                # Check if duration fits in the window
+                obs_end_time = now + timedelta(minutes=obs["duration"])
+                if isinstance(obs["end_time"], str):
+                    try:
+                        obs_end_time_limit = datetime.fromisoformat(obs["end_time"])
+                    except ValueError:
+                        obs_end_time_limit = datetime.strptime(
+                            obs["end_time"], "%Y-%m-%d %H:%M:%S%z"
+                        )
+                else:
+                    obs_end_time_limit = obs["end_time"]
+                if obs_end_time > obs_end_time_limit:
+                    self.log(
+                        f"   ❌ Cannot finish within allowed window (would end at {obs_end_time}, deadline {obs_end_time_limit})"
+                    )
+                    continue
+
+                # ✅ Passed all checks — schedule it
+                self.log(
+                    f"✅ Scheduling {obs['target']} on {telescope['name']}", tag="green"
+                )
                 obs["status"] = "Scheduled"
                 obs["telescope"] = telescope["name"]
                 telescope["current_observation"] = obs
                 self.schedule.append(obs)
-                break  # Only schedule one per step
+                scheduled = True
+                break  # go to next observation
 
+            if not scheduled:
+                self.log(
+                    f"⚠️ Could not schedule {obs['target']} this cycle. Will retry.",
+                    tag="yellow",
+                )
 
 
 class RealTimeTelescopeScheduler:
@@ -165,9 +209,12 @@ class RealTimeTelescopeScheduler:
                 "name": "Very Large Telescope",
                 "lat": -24.6,
                 "lon": -70.4,
-                "capabilities": ["Optical", "Infrared","Radio"],
+                "capabilities": ["Optical", "Infrared", "Radio"],
                 "status": "Operational",
                 "current_observation": None,
+                "success_count": 0,
+                "failure_count": 0,
+                "total_observation_time": 0,
             },
             {
                 "name": "Keck Observatory",
@@ -176,6 +223,9 @@ class RealTimeTelescopeScheduler:
                 "capabilities": ["Optical", "Infrared", "Radio"],
                 "status": "Operational",
                 "current_observation": None,
+                "success_count": 0,
+                "failure_count": 0,
+                "total_observation_time": 0,
             },
             {
                 "name": "Gran Telescopio Canarias",
@@ -184,6 +234,9 @@ class RealTimeTelescopeScheduler:
                 "capabilities": ["Optical", "Radio"],
                 "status": "Operational",
                 "current_observation": None,
+                "success_count": 0,
+                "failure_count": 0,
+                "total_observation_time": 0,
             },
         ]
 
@@ -203,7 +256,11 @@ class RealTimeTelescopeScheduler:
         try:
             self.rl_model = PPO.load("ppo_telescope_scheduler.zip")
             self.rl_scheduler = RLSchedulingWrapper(
-                self.rl_model, self.telescopes, self.observations, self.schedule, log_fn=self.log
+                self.rl_model,
+                self.telescopes,
+                self.observations,
+                self.schedule,
+                log_fn=self.log,
             )
             print("RL model loaded successfully.")
         except Exception as e:
@@ -276,12 +333,19 @@ class RealTimeTelescopeScheduler:
 
         ttk.Label(submit_frame, text="Start Time:").grid(row=3, column=0, sticky="w")
         self.start_entry = ttk.Entry(submit_frame, width=20)
-        self.start_entry.insert(0, datetime.utcnow().replace(tzinfo=timezone.utc).strftime("%Y-%m-%d %H:%M"))
+        self.start_entry.insert(
+            0, datetime.utcnow().replace(tzinfo=timezone.utc).strftime("%Y-%m-%d %H:%M")
+        )
         self.start_entry.grid(row=3, column=1, sticky="w", pady=2)
 
         ttk.Label(submit_frame, text="End Time:").grid(row=4, column=0, sticky="w")
         self.end_entry = ttk.Entry(submit_frame, width=20)
-        self.end_entry.insert(0, (datetime.utcnow().replace(tzinfo=timezone.utc) + timedelta(hours=2)).strftime("%Y-%m-%d %H:%M"))
+        self.end_entry.insert(
+            0,
+            (
+                datetime.utcnow().replace(tzinfo=timezone.utc) + timedelta(hours=2)
+            ).strftime("%Y-%m-%d %H:%M"),
+        )
         self.end_entry.grid(row=4, column=1, sticky="w", pady=2)
 
         ttk.Label(submit_frame, text="Priority:").grid(row=5, column=0, sticky="w")
@@ -293,7 +357,7 @@ class RealTimeTelescopeScheduler:
 
         ttk.Label(submit_frame, text="Wavelength:").grid(row=6, column=0, sticky="w")
         self.wavelength_combo = ttk.Combobox(
-            submit_frame, values=["Optical", "Infrared", "UV", "X-ray", "Radio"]
+            submit_frame, values=["Optical", "Infrared", "Radio"]
         )
         self.wavelength_combo.current(0)
         self.wavelength_combo.grid(row=6, column=1, sticky="w", pady=2)
@@ -455,17 +519,27 @@ class RealTimeTelescopeScheduler:
         log_frame = ttk.Frame(Logg_frame)
         log_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.log_console = tk.Text(log_frame, wrap=tk.WORD, height=20, state=tk.DISABLED)
+        self.log_console = tk.Text(
+            log_frame,
+            wrap=tk.WORD,
+            height=20,
+            state=tk.DISABLED,
+            bg="black",  # Set background to black
+            fg="white",  # Set default text color to white
+        )
         self.log_console_scrollbar = ttk.Scrollbar(log_frame, orient="vertical")
         self.log_console_scrollbar.config(command=self.log_console.yview)
         self.log_console.configure(yscrollcommand=self._on_log_scroll)
 
+        # Defining color tags for log messages with high contrast
+        self.log_console.tag_config("green", foreground="#00FF00")  # Bright green
+        self.log_console.tag_config("yellow", foreground="#FFFF00")  # Bright yellow
+        self.log_console.tag_config("red", foreground="#FF5555")  # Bright red
 
         self.log_console.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.log_console_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         self._log_at_bottom = True
-
 
         # Weather controls
         # ttk.Button(
@@ -613,15 +687,27 @@ class RealTimeTelescopeScheduler:
 
                     telescope["total_observation_time"] += obs["duration"]
 
-                    self.db.insert_history_entry({
-                        "telescope": telescope["name"],
-                        "id": obs.get("id", -1),
-                        "target": obs["target"],
-                        "success": success,
-                        "duration": obs["duration"]
-                    })
+                    obs_id = obs.get("id", -1)
 
-                    self.db.update_observation_status(obs.get("id", -1), "Completed", telescope["name"])
+                    # Insert into history
+                    self.db.insert_history_entry(
+                        {
+                            "telescope": telescope["name"],
+                            "id": obs_id,
+                            "target": obs["target"],
+                            "success": success,
+                            "duration": obs["duration"],
+                            "priority": obs["priority"],
+                        }
+                    )
+
+                    # Remove from database and memory
+                    self.db.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
+                    self.observations = [
+                        o for o in self.observations if o["id"] != obs_id
+                    ]
+
+                    # Update telescope state
                     telescope["current_observation"] = None
                     telescope["status"] = "Operational"
 
@@ -645,7 +731,9 @@ class RealTimeTelescopeScheduler:
                     try:
                         start_time = datetime.fromisoformat(start_time)
                     except ValueError:
-                        start_time = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S%z")
+                        start_time = datetime.strptime(
+                            start_time, "%Y-%m-%d %H:%M:%S%z"
+                        )
                 if isinstance(end_time, str):
                     try:
                         end_time = datetime.fromisoformat(end_time)
@@ -679,15 +767,23 @@ class RealTimeTelescopeScheduler:
 
         for obs in self.schedule[:]:
             if obs["status"] == "Scheduled" and obs["telescope"]:
-                telescope = next(t for t in self.telescopes if t["name"] == obs["telescope"])
-                if telescope["status"] == "Operational" and not telescope["current_observation"]:
+                telescope = next(
+                    t for t in self.telescopes if t["name"] == obs["telescope"]
+                )
+                if (
+                    telescope["status"] == "Operational"
+                    and not telescope["current_observation"]
+                ):
                     telescope["current_observation"] = obs
                     telescope["status"] = "Observing"
                     obs["status"] = "In Progress"
                     obs["start_time_actual"] = now
                     obs["end_time"] = now + timedelta(minutes=obs["duration"])
                     self.schedule.remove(obs)
-                    self.db.update_observation_status(obs.get("id", -1), "In Progress", telescope["name"])
+                    self.db.update_observation_status(
+                        obs.get("id", -1), "In Progress", telescope["name"]
+                    )
+        self.history = [dict(row) for row in self.db.get_history_entries()]
         self.root.after(0, self.update_all_displays)
 
     def submit_observation(self):
@@ -696,11 +792,15 @@ class RealTimeTelescopeScheduler:
             coordinates = self.coord_entry.get()
             duration = int(self.duration_entry.get())
             now = datetime.utcnow().replace(tzinfo=timezone.utc)
-            start_time_input = datetime.strptime(self.start_entry.get(), "%Y-%m-%d %H:%M")
+            start_time_input = datetime.strptime(
+                self.start_entry.get(), "%Y-%m-%d %H:%M"
+            )
             start_time = max(start_time_input.replace(tzinfo=timezone.utc), now)
 
             if self.end_entry.get().strip():
-                end_time_input = datetime.strptime(self.end_entry.get(), "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+                end_time_input = datetime.strptime(
+                    self.end_entry.get(), "%Y-%m-%d %H:%M"
+                ).replace(tzinfo=timezone.utc)
                 end_time = max(end_time_input, start_time + timedelta(minutes=duration))
             else:
                 end_time = start_time + timedelta(minutes=duration)
@@ -724,14 +824,18 @@ class RealTimeTelescopeScheduler:
                 "priority": priority,
                 "wavelength": wavelength,
                 "status": "Pending",
-                "telescope": None
+                "telescope": None,
             }
 
             self.db.insert_observation(new_obs)
             self.observations = [dict(row) for row in self.db.get_all_observations()]
+            self.schedule = [o for o in self.observations if o["status"] == "Scheduled"]
 
-            messagebox.showinfo("Success", f"Observation '{target}' submitted successfully")
+            messagebox.showinfo(
+                "Success", f"Observation '{target}' submitted successfully"
+            )
             self.update_observation_list()
+            self.update_schedule_display()
 
         except ValueError as e:
             messagebox.showerror("Error", f"Invalid input: {str(e)}")
@@ -791,13 +895,36 @@ class RealTimeTelescopeScheduler:
 
         obs_id = int(self.obs_tree.item(selected[0], "text"))
 
-        # Remove from observations list
-        self.observations = [obs for obs in self.observations if obs["id"] != obs_id]
+        # Confirm deletion
+        confirm = messagebox.askyesno(
+            "Confirm", f"Are you sure you want to delete Observation ID {obs_id}?"
+        )
+        if not confirm:
+            return
 
-        # Remove from schedule if it's there
+        # Find the observation to get its details
+        obs = next((o for o in self.observations if o["id"] == obs_id), None)
+        if obs:
+            # Insert into history as a failed/cancelled observation
+            self.db.insert_history_entry(
+                {
+                    "telescope": obs.get("telescope", "N/A"),
+                    "id": obs_id,
+                    "target": obs["target"],
+                    "success": False,  # Mark as not successful
+                    "duration": obs["duration"],
+                    "priority": obs["priority"],
+                }
+            )
+
+        # Remove from DB
+        self.db.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
+
+        # Remove from memory
+        self.observations = [obs for obs in self.observations if obs["id"] != obs_id]
         self.schedule = [obs for obs in self.schedule if obs["id"] != obs_id]
 
-        messagebox.showinfo("Success", "Observation deleted successfully")
+        messagebox.showinfo("Success", f"Observation ID {obs_id} deleted.")
         self.update_observation_list()
         self.update_schedule_display()
 
@@ -808,14 +935,21 @@ class RealTimeTelescopeScheduler:
         for i, telescope in enumerate(self.telescopes, 1):
             if telescope["current_observation"]:
                 obs = telescope["current_observation"]
-                # Ensure end_time is a datetime object
-                end_time = obs["end_time"]
-                if isinstance(end_time, str):
+                # Use start_time_actual if available, else fallback to start_time
+                start_time_actual = obs.get("start_time_actual", obs["start_time"])
+                if isinstance(start_time_actual, str):
                     try:
-                        end_time = datetime.fromisoformat(end_time)
+                        start_time_actual = datetime.fromisoformat(start_time_actual)
                     except ValueError:
-                        end_time = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S%z")
-                remaining = (end_time - datetime.now(timezone.utc)).seconds // 60
+                        start_time_actual = datetime.strptime(
+                            start_time_actual, "%Y-%m-%d %H:%M:%S%z"
+                        )
+                # Compute scheduled end time based on actual start + duration
+                scheduled_end_time = start_time_actual + timedelta(
+                    minutes=obs["duration"]
+                )
+                now = datetime.now(timezone.utc)
+                remaining = int((scheduled_end_time - now).total_seconds() // 60)
                 remaining_str = f"{remaining} min" if remaining > 0 else "Complete"
                 values = (
                     telescope["name"],
@@ -870,7 +1004,8 @@ class RealTimeTelescopeScheduler:
 
         self.schedule_text.insert(tk.END, "=== Current Observation Schedule ===\n")
         self.schedule_text.insert(
-            tk.END, f"Generated at: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}\n"
+            tk.END,
+            f"Generated at: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}\n",
         )
         self.schedule_text.insert(
             tk.END,
@@ -907,19 +1042,23 @@ class RealTimeTelescopeScheduler:
             self.schedule_text.insert(tk.END, "=== Scheduled Observations ===\n")
             for i, obs in enumerate(self.schedule, len(running_obs) + 1):
                 if obs["status"] == "Scheduled":
-                 # Ensure start_time and end_time are datetime objects
+                    # Ensure start_time and end_time are datetime objects
                     start_time = obs["start_time"]
                     end_time = obs["end_time"]
                     if isinstance(start_time, str):
                         try:
                             start_time = datetime.fromisoformat(start_time)
                         except ValueError:
-                            start_time = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S%z")
+                            start_time = datetime.strptime(
+                                start_time, "%Y-%m-%d %H:%M:%S%z"
+                            )
                     if isinstance(end_time, str):
                         try:
                             end_time = datetime.fromisoformat(end_time)
                         except ValueError:
-                            end_time = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S%z")
+                            end_time = datetime.strptime(
+                                end_time, "%Y-%m-%d %H:%M:%S%z"
+                            )
                     self.schedule_text.insert(
                         tk.END,
                         f"{i}. {obs['target']} ({obs['duration']} min)\n"
@@ -938,20 +1077,24 @@ class RealTimeTelescopeScheduler:
         """Draw a timeline visualization of the schedule"""
         self.schedule_canvas.delete("all")
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now().astimezone()  # Use system timezone
         start_time = now - timedelta(hours=1)
         end_time = now + timedelta(hours=6)
         total_seconds = (end_time - start_time).total_seconds()
 
         # Layout constants
-        label_margin = 155  # space for telescope names on the left
+        label_margin = 250  # Increased margin to avoid overlap
         right_margin = 70
+        lane_padding = 10  # Padding between lanes
+        name_gap = 10
         canvas_width = self.schedule_canvas.winfo_width()
         canvas_height = self.schedule_canvas.winfo_height()
         timeline_width = canvas_width - label_margin - right_margin
 
         # Draw timeline axis
-        self.schedule_canvas.create_line(label_margin, 30, canvas_width - right_margin, 30, width=2)
+        self.schedule_canvas.create_line(
+            label_margin, 30, canvas_width - right_margin, 30, width=2
+        )
 
         # Draw time markers (every hour)
         for i in range(7):
@@ -961,88 +1104,145 @@ class RealTimeTelescopeScheduler:
             self.schedule_canvas.create_text(x, 45, text=time_pos.strftime("%H:%M"))
 
         # Draw current time indicator
-        now_x = label_margin + ((now - start_time).total_seconds() / total_seconds) * timeline_width
-        self.schedule_canvas.create_line(now_x, 40, now_x, canvas_height - 20, fill="red", dash=(2, 2))
-        self.schedule_canvas.create_text(now_x, 15, text="NOW", fill="red")
+        now_x = (
+            label_margin
+            + ((now - start_time).total_seconds() / total_seconds) * timeline_width
+        )
+        self.schedule_canvas.create_line(
+            now_x, 50, now_x, canvas_height - 20, fill="red", dash=(2, 2)
+        )
+        self.schedule_canvas.create_text(now_x, 20, text="NOW", fill="red")
 
-        # Draw telescope lanes
-        lane_height = (canvas_height - 80) / len(self.telescopes)
+        # Draw telescope lanes with more spacing
+        num_telescopes = len(self.telescopes)
+        lane_height = (canvas_height - 80) / num_telescopes
         for i, telescope in enumerate(self.telescopes):
             y = 70 + (i * lane_height)
-
-            # Draw telescope name label
+            # Draw telescope name label, vertically centered in lane
             self.schedule_canvas.create_text(
-                label_margin - 10, y + lane_height / 2, text=telescope["name"], anchor="e"
+                label_margin - name_gap,
+                y + lane_height / 2,
+                text=telescope["name"],
+                anchor="e",
+            )
+            # Draw lane background
+            self.schedule_canvas.create_rectangle(
+                label_margin,
+                y + lane_padding / 2,
+                canvas_width - right_margin,
+                y + lane_height - lane_padding / 2,
+                fill="#f8f8f8",
+                outline="",
             )
 
             # Draw current observation if any
             if telescope["current_observation"]:
                 obs = telescope["current_observation"]
-                # Ensure start_time_actual and end_time are datetime objects
                 start_time_actual = obs.get("start_time_actual", obs["start_time"])
                 end_time_obs = obs["end_time"]
+                # Ensure both are datetime and in system timezone
                 if isinstance(start_time_actual, str):
                     try:
                         start_time_actual = datetime.fromisoformat(start_time_actual)
                     except ValueError:
-                        start_time_actual = datetime.strptime(start_time_actual, "%Y-%m-%d %H:%M:%S%z")
+                        start_time_actual = datetime.strptime(
+                            start_time_actual, "%Y-%m-%d %H:%M:%S%z"
+                        )
                 if isinstance(end_time_obs, str):
                     try:
                         end_time_obs = datetime.fromisoformat(end_time_obs)
                     except ValueError:
-                        end_time_obs = datetime.strptime(end_time_obs, "%Y-%m-%d %H:%M:%S%z")
-                start_x = label_margin + (
-                    (start_time_actual - start_time).total_seconds() / total_seconds
-                ) * timeline_width
-                end_x = label_margin + (
-                    (end_time_obs - start_time).total_seconds() / total_seconds
-                ) * timeline_width
-                end_x = max(end_x, start_x + 5)
+                        end_time_obs = datetime.strptime(
+                            end_time_obs, "%Y-%m-%d %H:%M:%S%z"
+                        )
+                # Convert to system timezone for plotting
+                if start_time_actual.tzinfo is not None:
+                    start_time_actual = start_time_actual.astimezone(now.tzinfo)
+                if end_time_obs.tzinfo is not None:
+                    end_time_obs = end_time_obs.astimezone(now.tzinfo)
+                start_x = (
+                    label_margin
+                    + ((start_time_actual - start_time).total_seconds() / total_seconds)
+                    * timeline_width
+                )
+                end_x = (
+                    label_margin
+                    + ((end_time_obs - start_time).total_seconds() / total_seconds)
+                    * timeline_width
+                )
+                end_x = max(end_x, start_x + 5)  # <-- move this line here
 
                 self.schedule_canvas.create_rectangle(
-                    start_x, y + 5, end_x, y + lane_height - 5, fill="blue", outline="black"
+                    start_x,
+                    y + lane_padding,
+                    end_x,
+                    y + lane_height - lane_padding,
+                    fill="blue",
+                    outline="black",
                 )
                 self.schedule_canvas.create_text(
-                    (start_x + end_x) / 2, y + lane_height / 2,
-                    text=f"{obs['target']} ({obs['duration']}min)", fill="white"
+                    (start_x + end_x) / 2,
+                    y + lane_height / 2,
+                    text=f"{obs['target']} ({obs['duration']}min)",
+                    fill="white",
                 )
 
         # Draw scheduled observations
         for obs in self.schedule:
             if obs["status"] == "Scheduled" and obs["telescope"]:
-                telescope_idx = next(i for i, t in enumerate(self.telescopes) if t["name"] == obs["telescope"])
+                telescope_idx = next(
+                    i
+                    for i, t in enumerate(self.telescopes)
+                    if t["name"] == obs["telescope"]
+                )
                 y = 70 + (telescope_idx * lane_height)
-
-                # Ensure start_time and end_time are datetime objects
                 start_time_obs = obs["start_time"]
                 end_time_obs = obs["end_time"]
                 if isinstance(start_time_obs, str):
                     try:
                         start_time_obs = datetime.fromisoformat(start_time_obs)
                     except ValueError:
-                        start_time_obs = datetime.strptime(start_time_obs, "%Y-%m-%d %H:%M:%S%z")
+                        start_time_obs = datetime.strptime(
+                            start_time_obs, "%Y-%m-%d %H:%M:%S%z"
+                        )
                 if isinstance(end_time_obs, str):
                     try:
                         end_time_obs = datetime.fromisoformat(end_time_obs)
                     except ValueError:
-                        end_time_obs = datetime.strptime(end_time_obs, "%Y-%m-%d %H:%M:%S%z")
-
-                start_x = label_margin + (
-                    (start_time_obs - start_time).total_seconds() / total_seconds
-                ) * timeline_width
-                end_x = label_margin + (
-                    (end_time_obs - start_time).total_seconds() / total_seconds
-                ) * timeline_width
+                        end_time_obs = datetime.strptime(
+                            end_time_obs, "%Y-%m-%d %H:%M:%S%z"
+                        )
+                # Convert to system timezone for plotting
+                if start_time_obs.tzinfo is not None:
+                    start_time_obs = start_time_obs.astimezone(now.tzinfo)
+                if end_time_obs.tzinfo is not None:
+                    end_time_obs = end_time_obs.astimezone(now.tzinfo)
+                start_x = (
+                    label_margin
+                    + ((start_time_obs - start_time).total_seconds() / total_seconds)
+                    * timeline_width
+                )
+                end_x = (
+                    label_margin
+                    + ((end_time_obs - start_time).total_seconds() / total_seconds)
+                    * timeline_width
+                )
                 end_x = max(end_x, start_x + 5)
 
                 self.schedule_canvas.create_rectangle(
-                    start_x, y + 5, end_x, y + lane_height - 5, fill="green", outline="black"
+                    start_x,
+                    y + lane_padding,
+                    end_x,
+                    y + lane_height - lane_padding,
+                    fill="green",
+                    outline="black",
                 )
                 self.schedule_canvas.create_text(
-                    (start_x + end_x) / 2, y + lane_height / 2,
-                    text=f"{obs['target']} ({obs['duration']}min)", fill="white"
+                    (start_x + end_x) / 2,
+                    y + lane_height / 2,
+                    text=f"{obs['target']} ({obs['duration']}min)",
+                    fill="white",
                 )
-
 
     def update_history_display(self):
         """Update the history display"""
@@ -1061,18 +1261,23 @@ class RealTimeTelescopeScheduler:
             color = "green" if entry["success"] else "red"
 
             self.history_text.insert(tk.END, f"Telescope: {entry['telescope']}\n")
-            self.history_text.insert(
-                tk.END, f"Observation: {entry['observation']['target']}\n"
-            )
+            self.history_text.insert(tk.END, f"Observation: {entry['target']}\n")
             self.history_text.insert(tk.END, f"Status: ")
             self.history_text.insert(tk.END, f"{status}\n", color)
+            # Parse completed_at string to datetime if needed
+            completed_at = entry["completed_at"]
+            if isinstance(completed_at, str):
+                try:
+                    completed_at = datetime.fromisoformat(completed_at)
+                except ValueError:
+                    completed_at = datetime.strptime(
+                        completed_at, "%Y-%m-%d %H:%M:%S%z"
+                    )
             self.history_text.insert(
                 tk.END,
-                f"Completed: {entry['completed_at'].strftime('%Y-%m-%d %H:%M')}\n",
+                f"Completed: {completed_at.strftime('%Y-%m-%d %H:%M')}\n",
             )
-            self.history_text.insert(
-                tk.END, f"Duration: {entry['observation']['duration']} minutes\n"
-            )
+            self.history_text.insert(tk.END, f"Duration: {entry['duration']} minutes\n")
             self.history_text.insert(tk.END, "-" * 50 + "\n\n")
 
         # Configure text colors
@@ -1096,7 +1301,7 @@ class RealTimeTelescopeScheduler:
         }
         priority_dist = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}
         for h in self.history:
-            priority = h["observation"]["priority"]
+            priority = h["priority"]
             priority_dist[priority] += 1
 
         # Create a bar chart of telescope usage
@@ -1228,7 +1433,7 @@ class RealTimeTelescopeScheduler:
 
         # Determine if the scroll is at the bottom
         try:
-            end = float(args[1]) if args[0] == 'moveto' else self.log_console.yview()[1]
+            end = float(args[1]) if args[0] == "moveto" else self.log_console.yview()[1]
             self._log_at_bottom = end >= 0.999
         except Exception:
             self._log_at_bottom = True  # Safe default
@@ -1242,7 +1447,6 @@ class RealTimeTelescopeScheduler:
         if self._log_at_bottom:
             self.log_console.see(tk.END)
         self.log_console.configure(state=tk.DISABLED)
-
 
 
 if __name__ == "__main__":
