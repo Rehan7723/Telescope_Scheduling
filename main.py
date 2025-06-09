@@ -644,7 +644,9 @@ class RealTimeTelescopeScheduler:
                 time.sleep(10)
 
             except Exception as e:
-                self.update_status(f"Error in update loop: {str(e)}")
+                self.root.after(
+                    0, lambda: self.update_status(f"Error in update loop: {str(e)}")
+                )
                 time.sleep(5)
 
     def update_all_displays(self):
@@ -763,26 +765,29 @@ class RealTimeTelescopeScheduler:
                             self.schedule.append(obs)
                             break
 
-        self.schedule = [obs for obs in self.schedule if obs["status"] != "In Progress"]
+        # Try to assign new scheduled observations to any now-available telescopes
+        for telescope in self.telescopes:
+            if (
+                telescope["status"] == "Operational"
+                and not telescope["current_observation"]
+            ):
+                # Find the next scheduled observation for this telescope
+                for obs in self.schedule:
+                    if (
+                        obs["status"] == "Scheduled"
+                        and obs.get("telescope") == telescope["name"]
+                    ):
+                        telescope["current_observation"] = obs
+                        telescope["status"] = "Observing"
+                        obs["status"] = "In Progress"
+                        obs["start_time_actual"] = now
+                        obs["end_time"] = now + timedelta(minutes=obs["duration"])
+                        self.schedule.remove(obs)
+                        self.db.update_observation_status(
+                            obs.get("id", -1), "In Progress", telescope["name"]
+                        )
+                        break  # Assign only one observation at a time
 
-        for obs in self.schedule[:]:
-            if obs["status"] == "Scheduled" and obs["telescope"]:
-                telescope = next(
-                    t for t in self.telescopes if t["name"] == obs["telescope"]
-                )
-                if (
-                    telescope["status"] == "Operational"
-                    and not telescope["current_observation"]
-                ):
-                    telescope["current_observation"] = obs
-                    telescope["status"] = "Observing"
-                    obs["status"] = "In Progress"
-                    obs["start_time_actual"] = now
-                    obs["end_time"] = now + timedelta(minutes=obs["duration"])
-                    self.schedule.remove(obs)
-                    self.db.update_observation_status(
-                        obs.get("id", -1), "In Progress", telescope["name"]
-                    )
         self.history = [dict(row) for row in self.db.get_history_entries()]
         self.root.after(0, self.update_all_displays)
 
@@ -1139,8 +1144,8 @@ class RealTimeTelescopeScheduler:
             if telescope["current_observation"]:
                 obs = telescope["current_observation"]
                 start_time_actual = obs.get("start_time_actual", obs["start_time"])
-                end_time_obs = obs["end_time"]
-                # Ensure both are datetime and in system timezone
+                duration = obs["duration"]
+                # Ensure start_time_actual is datetime and in system timezone
                 if isinstance(start_time_actual, str):
                     try:
                         start_time_actual = datetime.fromisoformat(start_time_actual)
@@ -1148,29 +1153,16 @@ class RealTimeTelescopeScheduler:
                         start_time_actual = datetime.strptime(
                             start_time_actual, "%Y-%m-%d %H:%M:%S%z"
                         )
-                if isinstance(end_time_obs, str):
-                    try:
-                        end_time_obs = datetime.fromisoformat(end_time_obs)
-                    except ValueError:
-                        end_time_obs = datetime.strptime(
-                            end_time_obs, "%Y-%m-%d %H:%M:%S%z"
-                        )
-                # Convert to system timezone for plotting
                 if start_time_actual.tzinfo is not None:
                     start_time_actual = start_time_actual.astimezone(now.tzinfo)
-                if end_time_obs.tzinfo is not None:
-                    end_time_obs = end_time_obs.astimezone(now.tzinfo)
                 start_x = (
                     label_margin
                     + ((start_time_actual - start_time).total_seconds() / total_seconds)
                     * timeline_width
                 )
-                end_x = (
-                    label_margin
-                    + ((end_time_obs - start_time).total_seconds() / total_seconds)
-                    * timeline_width
-                )
-                end_x = max(end_x, start_x + 5)  # <-- move this line here
+                # Rectangle width based on duration
+                rect_width = (duration * 60 / total_seconds) * timeline_width
+                end_x = start_x + max(rect_width, 5)
 
                 self.schedule_canvas.create_rectangle(
                     start_x,
@@ -1184,7 +1176,7 @@ class RealTimeTelescopeScheduler:
                     (start_x + end_x) / 2,
                     y + lane_height / 2,
                     text=f"{obs['target']} ({obs['duration']}min)",
-                    fill="white",
+                    fill="red",
                 )
 
         # Draw scheduled observations
@@ -1197,7 +1189,7 @@ class RealTimeTelescopeScheduler:
                 )
                 y = 70 + (telescope_idx * lane_height)
                 start_time_obs = obs["start_time"]
-                end_time_obs = obs["end_time"]
+                duration = obs["duration"]
                 if isinstance(start_time_obs, str):
                     try:
                         start_time_obs = datetime.fromisoformat(start_time_obs)
@@ -1205,29 +1197,15 @@ class RealTimeTelescopeScheduler:
                         start_time_obs = datetime.strptime(
                             start_time_obs, "%Y-%m-%d %H:%M:%S%z"
                         )
-                if isinstance(end_time_obs, str):
-                    try:
-                        end_time_obs = datetime.fromisoformat(end_time_obs)
-                    except ValueError:
-                        end_time_obs = datetime.strptime(
-                            end_time_obs, "%Y-%m-%d %H:%M:%S%z"
-                        )
-                # Convert to system timezone for plotting
                 if start_time_obs.tzinfo is not None:
                     start_time_obs = start_time_obs.astimezone(now.tzinfo)
-                if end_time_obs.tzinfo is not None:
-                    end_time_obs = end_time_obs.astimezone(now.tzinfo)
                 start_x = (
                     label_margin
                     + ((start_time_obs - start_time).total_seconds() / total_seconds)
                     * timeline_width
                 )
-                end_x = (
-                    label_margin
-                    + ((end_time_obs - start_time).total_seconds() / total_seconds)
-                    * timeline_width
-                )
-                end_x = max(end_x, start_x + 5)
+                rect_width = (duration * 60 / total_seconds) * timeline_width
+                end_x = start_x + max(rect_width, 5)
 
                 self.schedule_canvas.create_rectangle(
                     start_x,
@@ -1335,28 +1313,26 @@ class RealTimeTelescopeScheduler:
         self.comp_ax1.clear()
         self.comp_ax2.clear()
 
-        if not self.history:
+        stats = self.db.get_telescope_stats()  # Fetch from DB
+
+        if not stats:
             self.comp_ax1.text(0.5, 0.5, "No data available", ha="center", va="center")
             self.comp_canvas.draw()
             return
 
-        # Prepare data for comparison
-        telescopes = [t["name"] for t in self.telescopes]
+        telescopes = [s["name"] for s in stats]
         success_rates = []
         observation_counts = []
         observation_times = []
 
-        for telescope in self.telescopes:
-            total = telescope["success_count"] + telescope["failure_count"]
+        for s in stats:
+            total = (s.get("success_count") or 0) + (s.get("failure_count") or 0)
             if total > 0:
-                success_rates.append(telescope["success_count"] / total)
+                success_rates.append(s.get("success_count", 0) / total)
             else:
                 success_rates.append(0)
-
-            observation_counts.append(
-                telescope["success_count"] + telescope["failure_count"]
-            )
-            observation_times.append(telescope["total_observation_time"])
+            observation_counts.append(total)
+            observation_times.append(s.get("total_observation_time", 0))
 
         # Plot success rates
         bars = self.comp_ax1.bar(
@@ -1408,24 +1384,7 @@ class RealTimeTelescopeScheduler:
                 va="bottom",
             )
 
-        # Determine which telescope is best
-        best_telescope = None
-        best_score = -1
-
-        for i, telescope in enumerate(self.telescopes):
-            # Simple scoring: success rate * observation count
-            score = success_rates[i] * observation_counts[i]
-            if score > best_score:
-                best_score = score
-                best_telescope = telescope["name"]
-
-        # Add best telescope annotation
-        # self.comp_ax1.text(0.5, -0.2,
-        #                   f"Best Performing Telescope: {best_telescope} (Score: {best_score:.1f})",
-        #                   ha='center', va='center', transform=self.comp_ax1.transAxes,
-        #                   fontsize=10, bbox=dict(facecolor='yellow', alpha=0.5))
-
-        # self.comp_canvas.draw()
+        self.comp_canvas.draw()
 
     def _on_log_scroll(self, *args):
         # Pass scroll values to the scrollbar

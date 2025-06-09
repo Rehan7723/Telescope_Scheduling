@@ -6,7 +6,7 @@ class TelescopeSchedulingEnv(gym.Env):
     def __init__(self):
         super().__init__()
         self.num_telescopes = 3
-        self.num_observations = 5
+        self.num_observations = 6
 
         # Observation space is a dictionary of telescope and observation features
         self.observation_space = spaces.Dict({

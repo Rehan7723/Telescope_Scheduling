@@ -9,6 +9,7 @@ class Database:
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.cursor = self.conn.cursor()
+        self.create_tables()  # Ensure tables are created
 
     def execute(self, query, params=()):
         self.cursor.execute(query, params)
@@ -101,3 +102,33 @@ class Database:
 
     def delete_observation(self, obs_id):
         self.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
+
+    def delete_all_observation(self):
+        self.execute("DELETE FROM observations", ())
+
+    def get_telescope_stats(self):
+        """Return a list of dicts with telescope stats: name, success_count, failure_count, total_observation_time"""
+        rows = self.query(
+            "SELECT name, success_count, failure_count, total_observation_time FROM telescopes"
+        )
+        return [dict(row) for row in rows]
+
+    def query(self, sql, params=None):
+        """Execute a SELECT query and return rows as a list of dictionaries."""
+        self.cursor.execute(sql, params or [])
+        columns = [desc[0] for desc in self.cursor.description]
+        return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
+
+    def create_tables(self):
+        """Create necessary tables if they don't exist."""
+        self.cursor.execute(
+            """
+        CREATE TABLE IF NOT EXISTS telescopes (
+            name TEXT PRIMARY KEY,
+            success_count INTEGER DEFAULT 0,
+            failure_count INTEGER DEFAULT 0,
+            total_observation_time INTEGER DEFAULT 0
+        )
+        """
+        )
+        self.conn.commit()
