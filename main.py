@@ -124,7 +124,7 @@ class RLSchedulingWrapper:
             return
 
         cloud_cover = [
-            self.fetchD_weather_for_location(t["lat"], t["lon"])
+            self.fetch_weather_for_location(t["lat"], t["lon"])
             for t in available_telescopes
         ]
 
@@ -667,129 +667,96 @@ class RealTimeTelescopeScheduler:
         self.status_var.set(message)
 
     def update_system_status(self):
+        """Update system status and handle completed observations"""
         now = datetime.now(timezone.utc)
+        updates_made = False
 
+        # First check for completed observations
         for telescope in self.telescopes:
             if telescope["current_observation"]:
                 obs = telescope["current_observation"]
-                # Ensure end_time is a datetime object
                 end_time = obs["end_time"]
                 if isinstance(end_time, str):
                     try:
                         end_time = datetime.fromisoformat(end_time)
                     except ValueError:
                         end_time = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S%z")
-                if "end_time" in obs and end_time <= now:
-                    success = random.random() > 0.1
 
+                if end_time <= now:
+                    # Mark observation as complete
+                    success = random.random() > 0.1
+                    updates_made = True
+
+                    # Update telescope stats
                     if success:
                         telescope["success_count"] += 1
                     else:
                         telescope["failure_count"] += 1
-
                     telescope["total_observation_time"] += obs["duration"]
 
-                    obs_id = obs.get("id", -1)
-
-                    # Insert into history
+                    # Add to history
                     self.db.insert_history_entry(
                         {
                             "telescope": telescope["name"],
-                            "id": obs_id,
+                            "id": obs.get("id", -1),
                             "target": obs["target"],
                             "success": success,
                             "duration": obs["duration"],
                             "priority": obs["priority"],
+                            "completed_at": now.strftime("%Y-%m-%d %H:%M:%S%z"),
                         }
                     )
 
-                    # Remove from database and memory
+                    # Remove from observations and database
+                    obs_id = obs.get("id", -1)
                     self.db.execute("DELETE FROM observations WHERE id = ?", (obs_id,))
                     self.observations = [
-                        o for o in self.observations if o["id"] != obs_id
+                        o for o in self.observations if o.get("id") != obs_id
                     ]
 
-                    # Update telescope state
+                    # Clear telescope's current observation
                     telescope["current_observation"] = None
                     telescope["status"] = "Operational"
 
+                # Try to schedule new observations
         if self.rl_scheduler:
+            # Use RL scheduler to schedule observations
+            self.rl_scheduler.observations = self.observations
+            self.rl_scheduler.telescopes = self.telescopes
             self.rl_scheduler.run_step()
+            updates_made = True
         else:
-            # Fallback to rule-based logic if RL not available
+            # Basic scheduling logic if RL not available
             available_telescopes = [
                 t
                 for t in self.telescopes
                 if t["status"] == "Operational" and not t["current_observation"]
             ]
+            pending_obs = [o for o in self.observations if o["status"] == "Pending"]
 
-            priority_order = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1}
-
-            pending_obs = []
-            for obs in self.observations:
-                start_time = obs["start_time"]
-                end_time = obs["end_time"]
-                if isinstance(start_time, str):
-                    try:
-                        start_time = datetime.fromisoformat(start_time)
-                    except ValueError:
-                        start_time = datetime.strptime(
-                            start_time, "%Y-%m-%d %H:%M:%S%z"
-                        )
-                if isinstance(end_time, str):
-                    try:
-                        end_time = datetime.fromisoformat(end_time)
-                    except ValueError:
-                        end_time = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S%z")
-                if obs["status"] == "Pending" and start_time <= now <= end_time:
-                    pending_obs.append(obs)
-
-            if pending_obs:
-                pending_obs.sort(
-                    key=lambda x: (-priority_order[x["priority"]], x["end_time"])
-                )
-
-                for telescope in available_telescopes:
-                    for obs in pending_obs:
-                        if (
-                            obs["status"] == "Pending"
-                            and obs["wavelength"] in telescope["capabilities"]
-                        ):
-                            if (
-                                obs["wavelength"] in ["Optical", "UV"]
-                                and self.weather_data["cloud_cover"] > 0.7
-                            ):
-                                continue
-                            obs["status"] = "Scheduled"
-                            obs["telescope"] = telescope["name"]
-                            self.schedule.append(obs)
-                            break
-
-        # Try to assign new scheduled observations to any now-available telescopes
-        for telescope in self.telescopes:
-            if (
-                telescope["status"] == "Operational"
-                and not telescope["current_observation"]
-            ):
-                # Find the next scheduled observation for this telescope
-                for obs in self.schedule:
-                    if (
-                        obs["status"] == "Scheduled"
-                        and obs.get("telescope") == telescope["name"]
-                    ):
+            for telescope in available_telescopes:
+                for obs in sorted(
+                    pending_obs, key=lambda x: (x["priority"], x["start_time"])
+                ):
+                    if obs["wavelength"] in telescope["capabilities"]:
+                        obs["status"] = "Scheduled"
+                        obs["telescope"] = telescope["name"]
                         telescope["current_observation"] = obs
                         telescope["status"] = "Observing"
-                        obs["status"] = "In Progress"
                         obs["start_time_actual"] = now
                         obs["end_time"] = now + timedelta(minutes=obs["duration"])
-                        self.schedule.remove(obs)
                         self.db.update_observation_status(
                             obs.get("id", -1), "In Progress", telescope["name"]
                         )
-                        break  # Assign only one observation at a time
+                        pending_obs.remove(obs)
+                        updates_made = True
+                        break
 
-        self.history = [dict(row) for row in self.db.get_history_entries()]
-        self.root.after(0, self.update_all_displays)
+        # Update displays if changes were made
+        if updates_made:
+            self.schedule = [o for o in self.observations if o["status"] == "Scheduled"]
+            self.history = [dict(row) for row in self.db.get_history_entries()]
+            self.root.after(0, self.update_all_displays)
 
     def submit_observation(self):
         try:
@@ -1081,6 +1048,7 @@ class RealTimeTelescopeScheduler:
     def draw_schedule_timeline(self):
         """Draw a timeline visualization of the schedule"""
         self.schedule_canvas.delete("all")
+        self.observation_rectangles = []  # Clear previous rectangles
 
         now = datetime.now().astimezone()  # Use system timezone
         start_time = now - timedelta(hours=1)
@@ -1088,9 +1056,9 @@ class RealTimeTelescopeScheduler:
         total_seconds = (end_time - start_time).total_seconds()
 
         # Layout constants
-        label_margin = 250  # Increased margin to avoid overlap
+        label_margin = 230
         right_margin = 70
-        lane_padding = 10  # Padding between lanes
+        lane_padding = 10
         name_gap = 10
         canvas_width = self.schedule_canvas.winfo_width()
         canvas_height = self.schedule_canvas.winfo_height()
@@ -1118,12 +1086,12 @@ class RealTimeTelescopeScheduler:
         )
         self.schedule_canvas.create_text(now_x, 20, text="NOW", fill="red")
 
-        # Draw telescope lanes with more spacing
+        # Draw telescope lanes
         num_telescopes = len(self.telescopes)
         lane_height = (canvas_height - 80) / num_telescopes
         for i, telescope in enumerate(self.telescopes):
             y = 70 + (i * lane_height)
-            # Draw telescope name label, vertically centered in lane
+            # Draw telescope name label
             self.schedule_canvas.create_text(
                 label_margin - name_gap,
                 y + lane_height / 2,
@@ -1145,7 +1113,6 @@ class RealTimeTelescopeScheduler:
                 obs = telescope["current_observation"]
                 start_time_actual = obs.get("start_time_actual", obs["start_time"])
                 duration = obs["duration"]
-                # Ensure start_time_actual is datetime and in system timezone
                 if isinstance(start_time_actual, str):
                     try:
                         start_time_actual = datetime.fromisoformat(start_time_actual)
@@ -1160,7 +1127,6 @@ class RealTimeTelescopeScheduler:
                     + ((start_time_actual - start_time).total_seconds() / total_seconds)
                     * timeline_width
                 )
-                # Rectangle width based on duration
                 rect_width = (duration * 60 / total_seconds) * timeline_width
                 end_x = start_x + max(rect_width, 5)
 
@@ -1169,14 +1135,32 @@ class RealTimeTelescopeScheduler:
                     y + lane_padding,
                     end_x,
                     y + lane_height - lane_padding,
-                    fill="blue",
+                    fill="blue" if obs["status"] == "In Progress" else "green",
                     outline="black",
                 )
+
+                # Use abbreviated text for small rectangles
+                if rect_width > 50:
+                    text = f"{obs['target']} ({obs['duration']}min)"
+                else:
+                    text = f"{obs['duration']}min"  # Show only duration for small rectangles
+
                 self.schedule_canvas.create_text(
                     (start_x + end_x) / 2,
                     y + lane_height / 2,
-                    text=f"{obs['target']} ({obs['duration']}min)",
-                    fill="red",
+                    text=text,
+                    fill="white",
+                )
+
+                # Store rectangle coordinates and observation name
+                self.observation_rectangles.append(
+                    (
+                        start_x,
+                        y + lane_padding,
+                        end_x,
+                        y + lane_height - lane_padding,
+                        obs["target"],
+                    )
                 )
 
         # Draw scheduled observations
@@ -1221,6 +1205,79 @@ class RealTimeTelescopeScheduler:
                     text=f"{obs['target']} ({obs['duration']}min)",
                     fill="white",
                 )
+
+                # Store rectangle coordinates and observation name
+                self.observation_rectangles.append(
+                    (
+                        start_x,
+                        y + lane_padding,
+                        end_x,
+                        y + lane_height - lane_padding,
+                        obs["target"],
+                    )
+                )
+
+        # Create a tooltip label for the timeline
+        self.tooltip = tk.Label(
+            self.schedule_canvas,
+            text="",
+            bg="yellow",
+            fg="black",
+            relief=tk.SOLID,
+            borderwidth=1,
+            font=("Arial", 10),
+        )
+        self.tooltip.place_forget()  # Initially hide the tooltip
+
+        # Bind mouse movement for tooltip
+        def on_mouse_move(event):
+            x = event.x
+            y = event.y
+
+            # Check if mouse is over any observation rectangle
+            found = False
+            for telescope in self.telescopes:
+                if telescope["current_observation"]:
+                    obs = telescope["current_observation"]
+                    start_time_actual = obs.get("start_time_actual", obs["start_time"])
+                    duration = obs["duration"]
+                    if isinstance(start_time_actual, str):
+                        try:
+                            start_time_actual = datetime.fromisoformat(
+                                start_time_actual
+                            )
+                        except ValueError:
+                            start_time_actual = datetime.strptime(
+                                start_time_actual, "%Y-%m-%d %H:%M:%S%z"
+                            )
+                    if start_time_actual.tzinfo is not None:
+                        start_time_actual = start_time_actual.astimezone(now.tzinfo)
+                    start_x = (
+                        label_margin
+                        + (
+                            (start_time_actual - start_time).total_seconds()
+                            / total_seconds
+                        )
+                        * timeline_width
+                    )
+                    rect_width = (duration * 60 / total_seconds) * timeline_width
+                    end_x = start_x + max(rect_width, 5)
+
+                    if start_x <= x <= end_x and y >= 70 + (
+                        telescope_idx * lane_height
+                    ):
+                        # Mouse is over this observation
+                        self.tooltip.config(
+                            text=f"{obs['target']} ({obs['duration']} min)\nTelescope: {telescope['name']}"
+                        )
+                        self.tooltip.place(x=x + 10, y=y + 10)
+                        found = True
+                        break
+
+            if not found:
+                self.tooltip.place_forget()  # Hide tooltip if not over any observation
+
+        self.schedule_canvas.bind("<Motion>", self.show_tooltip)
 
     def update_history_display(self):
         """Update the history display"""
@@ -1406,6 +1463,24 @@ class RealTimeTelescopeScheduler:
         if self._log_at_bottom:
             self.log_console.see(tk.END)
         self.log_console.configure(state=tk.DISABLED)
+
+    def show_tooltip(self, event):
+        """Show tooltip when hovering over an observation."""
+        x, y = event.x, event.y
+        found = False  # Track whether the mouse is over any rectangle
+
+        # Check if the mouse is over any observation rectangle
+        for rect in self.observation_rectangles:
+            start_x, start_y, end_x, end_y, name = rect
+            if start_x <= x <= end_x and start_y <= y <= end_y:
+                self.tooltip.config(text=name)
+                self.tooltip.place(x=x + 10, y=y + 10)  # Position tooltip near cursor
+                found = True
+                break  # Stop checking once a match is found
+
+        # Hide the tooltip if the mouse is not over any rectangle
+        if not found:
+            self.tooltip.place_forget()
 
 
 if __name__ == "__main__":
